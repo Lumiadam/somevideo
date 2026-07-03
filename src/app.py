@@ -602,7 +602,8 @@ if st.session_state["authentication_status"]:
                         # Simulating file save
                         video_path = None
                         if up_file is not None:
-                            upload_dir = os.path.join("src", "assets", "user_uploads")
+                            app_dir = os.path.dirname(os.path.abspath(__file__))
+                            upload_dir = os.path.join(app_dir, "assets", "user_uploads")
                             os.makedirs(upload_dir, exist_ok=True)
                             safe_name = "".join(c for c in up_title if c.isalnum() or c in ("_", "-")).strip()
                             if not safe_name:
@@ -1044,7 +1045,8 @@ if st.session_state["authentication_status"]:
                             # Save custom poster if uploaded
                             poster_path = m_poster[0]
                             if img_file is not None:
-                                upload_img_dir = os.path.join("src", "assets", "uploaded_posters")
+                                app_dir = os.path.dirname(os.path.abspath(__file__))
+                                upload_img_dir = os.path.join(app_dir, "assets", "uploaded_posters")
                                 os.makedirs(upload_img_dir, exist_ok=True)
                                 safe_title = "".join(c for c in m_title if c.isalnum() or c in ("_", "-")).strip()
                                 if not safe_title:
@@ -1059,7 +1061,8 @@ if st.session_state["authentication_status"]:
                             # Save custom video if uploaded
                             video_path = None
                             if video_file is not None:
-                                upload_video_dir = os.path.join("src", "assets", "uploaded_videos")
+                                app_dir = os.path.dirname(os.path.abspath(__file__))
+                                upload_video_dir = os.path.join(app_dir, "assets", "uploaded_videos")
                                 os.makedirs(upload_video_dir, exist_ok=True)
                                 safe_title = "".join(c for c in m_title if c.isalnum() or c in ("_", "-")).strip()
                                 if not safe_title:
