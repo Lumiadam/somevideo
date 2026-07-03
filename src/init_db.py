@@ -148,7 +148,7 @@ def init_database():
     # Insert default groups
     default_groups = [
         (1, "電影研究社", "admin"),
-        (2, "搞笑短影音同好會", "admin"),
+        (2, "搞笑短影音同好會", "user1"),
         (3, "驚悚懸疑同好會", "admin"),
         (4, "動漫與奇幻世界", "admin")
     ]
@@ -158,13 +158,12 @@ def init_database():
     default_members = [
         # Group Owners (auto-joined as Owner)
         (1, "admin", "Owner", "Joined"),
-        (2, "admin", "Owner", "Joined"),
+        (2, "user1", "Owner", "Joined"),
         (3, "admin", "Owner", "Joined"),
         (4, "admin", "Owner", "Joined"),
         
         # Group Members (Joined)
         (1, "user1", "Member", "Joined"),
-        (2, "user1", "Member", "Joined"),
         (3, "user1", "Member", "Joined"),
         (1, "user2", "Member", "Joined"),
         (4, "user2", "Member", "Joined"),

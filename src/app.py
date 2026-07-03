@@ -60,7 +60,9 @@ from src.data_manager import (
     get_pending_movies, update_movie_status, create_group, join_group,
     get_user_groups, get_all_groups, get_user_memberships_status,
     get_group_pending_members, update_group_member_status,
-    add_movie_to_group, approve_group_movie, reject_group_movie, get_group_pending_movies
+    add_movie_to_group, approve_group_movie, reject_group_movie, get_group_pending_movies,
+    delete_movie, kick_group_member, get_group_joined_members, get_group_active_movies,
+    trigger_db_sync
 )
 from src.recommender import get_recommendations
 from src.auth_helper import get_auth_config, register_user
@@ -120,6 +122,13 @@ def show_movie_modal(movie):
         conn.close()
         if row and row["shared_by"]:
             st.info(f"📢 這部影片是由 **{row['shared_by']}** 分享至本群組")
+            if row["shared_by"] == username:
+                with st.popover("📤 從此群組收回分享"):
+                    st.warning("確認要將此影片從群組空間中收回嗎？")
+                    if st.button("確認收回", key=f"recall_share_{g_id}_{detail_movie['id']}"):
+                        reject_group_movie(g_id, detail_movie["id"])
+                        st.toast("已從此群組收回分享 (空間資料已同步至雲端)")
+                        st.rerun()
             
     # Add sharing selectbox and button
     st.write(" ")
@@ -166,9 +175,9 @@ def show_movie_modal(movie):
                             add_movie_to_group(target_gid, detail_movie["id"], username, status_to_insert)
                             
                             if status_to_insert == "Active":
-                                st.toast(f"已分享並自動發佈至【{selected_target_gname}】！")
+                                st.toast(f"已分享並自動發佈至【{selected_target_gname}】 (空間資料已同步至雲端)！")
                             else:
-                                st.toast(f"已提交分享申請至【{selected_target_gname}】，等待群組管理員審核。")
+                                st.toast(f"已提交分享申請至【{selected_target_gname}】 (空間資料已同步至雲端)！")
                             st.rerun()
             else:
                 st.info("💡 此影片已分享至您加入的所有群組空間。")
@@ -644,8 +653,10 @@ if st.session_state["authentication_status"]:
                         )
                         if vis_val == "Private":
                             st.success(f"🎉 私密影片《{up_title}》已成功發佈！此影片僅限您本人觀看，無需審核。")
+                            st.toast("空間資料已同步至雲端")
                         else:
                             st.success(f"🎉 影片《{up_title}》已成功送出審核！待管理員或相關審核通過後發佈。")
+                            st.toast("空間資料已同步至雲端")
             st.markdown("</div>", unsafe_allow_html=True)
             
             # --- 我的影片上傳與審核紀錄 ---
@@ -672,7 +683,15 @@ if st.session_state["authentication_status"]:
                         elif status == "Rejected":
                             st.error("🔴 已駁回 (Rejected)")
                         else:
-                            st.info(f"⚪ {status}")
+                            st.info(f"狀態: {status}")
+                            
+                        # Delete uploaded movie popover confirmation
+                        with st.popover("🗑️ 刪除影片"):
+                            st.warning("確認要將此影片從空間中告別嗎？")
+                            if st.button("確認", key=f"del_user_movie_{m['id']}"):
+                                delete_movie(m['id'])
+                                st.toast("已與該影片優雅告別 (空間資料已同步至雲端)")
+                                st.rerun()
                     st.markdown("</div>", unsafe_allow_html=True)
             else:
                 st.info("您目前沒有上傳任何影片。")
@@ -682,8 +701,8 @@ if st.session_state["authentication_status"]:
             st.write("## 👥 群組與社群管理空間")
             st.write("加入感興趣的群組，或自創一個社團！在群組中，系統的推薦演算法會根據您在該群組中的獨立行為，生成客製化的推薦內容。")
             
-            tab_my_groups, tab_join_group, tab_create_group, tab_owner_audit, tab_movie_audit = st.tabs([
-                "🏡 我加入的群組", "🔍 尋找並加入群組", "➕ 建立新群組", "🛡️ 成員申請審核", "🎬 影片分享審核"
+            tab_my_groups, tab_join_group, tab_create_group, tab_owner_audit, tab_movie_audit, tab_owner_panel = st.tabs([
+                "🏡 我加入的群組", "🔍 尋找並加入群組", "➕ 建立新群組", "🛡️ 成員申請審核", "🎬 影片分享審核", "⚙️ 群組影片與成員管理"
             ])
             
             with tab_my_groups:
@@ -774,12 +793,12 @@ if st.session_state["authentication_status"]:
                                     with col_approve:
                                         if st.button("✅ 通過", key=f"app_mv_{og['group_id']}_{pm['id']}", type="primary"):
                                             approve_group_movie(og["group_id"], pm["id"])
-                                            st.toast("影片已審核通過並發佈至群組！")
+                                            st.toast("影片已審核通過並發佈至群組！ (空間資料已同步至雲端)")
                                             st.rerun()
                                     with col_reject:
                                         if st.button("❌ 拒絕", key=f"rej_mv_{og['group_id']}_{pm['id']}", type="secondary"):
                                             reject_group_movie(og["group_id"], pm["id"])
-                                            st.toast("已拒絕並刪除該影片的群組分享。")
+                                            st.toast("已拒絕並下架該影片。 (空間資料已同步至雲端)")
                                             st.rerun()
                     if not has_any_pending:
                         st.info("💬 目前沒有待審核的影片分享申請。")
@@ -803,6 +822,62 @@ if st.session_state["authentication_status"]:
                             else:
                                 st.error(msg)
                 st.markdown("</div>", unsafe_allow_html=True)
+                
+            with tab_owner_panel:
+                # Fetch groups created/owned by this user
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT group_id, name FROM Groups WHERE created_by = ?", (username,))
+                owned_groups = [dict(row) for row in cursor.fetchall()]
+                conn.close()
+                
+                if owned_groups:
+                    group_names_owned = [g["name"] for g in owned_groups]
+                    selected_owned_gname = st.selectbox("選擇要管理的群組空間", group_names_owned, key="owner_panel_gselect")
+                    selected_owned_gid = next(g["group_id"] for g in owned_groups if g["name"] == selected_owned_gname)
+                    
+                    col_members, col_movies = st.columns(2)
+                    
+                    with col_members:
+                        st.write("### 👥 成員管理")
+                        joined_members = get_group_joined_members(selected_owned_gid)
+                        # Filter out the owner themselves
+                        joined_members = [m for m in joined_members if m["username"] != username]
+                        if joined_members:
+                            for m in joined_members:
+                                col_mname, col_mbtn = st.columns([3, 2])
+                                with col_mname:
+                                    st.write(f"👤 `{m['username']}` ({m['group_role']})")
+                                with col_mbtn:
+                                    with st.popover("🗑️ 剔除成員"):
+                                        st.warning(f"確定要將成員 {m['username']} 剔除此群組嗎？")
+                                        if st.button("確認剔除", key=f"kick_{selected_owned_gid}_{m['username']}"):
+                                            kick_group_member(selected_owned_gid, m["username"])
+                                            st.toast(f"已將 {m['username']} 剔除此群組 (空間資料已同步至雲端)")
+                                            st.rerun()
+                        else:
+                            st.info("此群組目前沒有其他成員。")
+                            
+                    with col_movies:
+                        st.write("### 🎬 影片管理")
+                        active_movies = get_group_active_movies(selected_owned_gid)
+                        if active_movies:
+                            for am in active_movies:
+                                col_amname, col_ambtn = st.columns([3, 2])
+                                with col_amname:
+                                    st.write(f"🎬 **{am['title']}**")
+                                    st.caption(f"由 `{am['shared_by']}` 分享")
+                                with col_ambtn:
+                                    with st.popover("🗑️ 下架影片"):
+                                        st.warning(f"確定要將影片 【{am['title']}】 從群組庫中下架嗎？")
+                                        if st.button("確認下架", key=f"owner_del_mv_{selected_owned_gid}_{am['id']}"):
+                                            reject_group_movie(selected_owned_gid, am["id"])
+                                            st.toast(f"已從群組庫中下架 【{am['title']}】 (空間資料已同步至雲端)")
+                                            st.rerun()
+                        else:
+                            st.info("此群組影片庫目前沒有影片。")
+                else:
+                    st.info("💡 您目前不是任何群組的建立者，無群組管理權限。")
 
         elif menu == "📝 我的評分紀錄":
             st.write("## 📝 評分歷史紀錄")
@@ -1020,6 +1095,7 @@ if st.session_state["authentication_status"]:
                                 video_preview_url="https://www.w3schools.com/html/mov_bbb.mp4"
                             )
                             st.success(f"影片《{m_title}》已成功寫入資料庫！")
+                            st.toast("空間資料已同步至雲端")
                 st.markdown("</div>", unsafe_allow_html=True)
                 
             with tab_csv:
@@ -1101,44 +1177,86 @@ if st.session_state["authentication_status"]:
                                 imported_count += 1
                             conn.commit()
                             conn.close()
-                            st.toast(f"成功批次匯入 {imported_count} 部影片！ 🎉")
+                            trigger_db_sync()
+                            st.toast(f"成功批次匯入 {imported_count} 部影片 (空間資料已同步至雲端)！ 🎉")
                             st.success(f"已成功匯入 {imported_count} 部影片至資料庫。")
                 st.markdown("</div>", unsafe_allow_html=True)
                 
         elif menu == "🔍 影片審核後台":
             st.write("## 🔍 影片審核後台")
-            st.write("在此審核一般使用者上傳的影片。審核通過的影片會立刻發佈至影音大廳供所有人觀賞。")
+            st.write("在此審核一般使用者分享的影片。審核通過的影片會立刻發佈至影音大廳，供所有人觀賞。")
             
-            pending_movies = get_pending_movies()
+            tab_pending_adm, tab_all_adm = st.tabs(["⏳ 待審核影片", "🎬 平台全部影片"])
             
-            if pending_movies:
-                for movie in pending_movies:
-                    st.markdown("<div class='glass-card' style='margin-bottom: 1rem;'>", unsafe_allow_html=True)
-                    col_det, col_ops = st.columns([4, 1])
-                    
-                    with col_det:
-                        st.write(f"### 🎬 {movie['title']}")
-                        st.markdown(f"**類型:** `{movie['genre']}` | **片長:** `{movie['duration']}` | **上傳者:** `{movie['uploaded_by']}`")
-                        st.write(f"**大綱描述:** {movie['description']}")
-                        if movie.get('video_path'):
-                            st.write(f"*影片檔案已暫存於:* `{movie['video_path']}`")
-                            
-                    with col_ops:
-                        st.write(" ")
-                        st.write(" ")
-                        btn_approve = st.button("✅ 核准 (Approve)", key=f"appr_{movie['id']}", type="primary")
-                        btn_reject = st.button("❌ 駁回 (Reject)", key=f"rej_{movie['id']}", type="secondary")
+            with tab_pending_adm:
+                pending_movies = get_pending_movies()
+                if pending_movies:
+                    for movie in pending_movies:
+                        st.markdown("<div class='glass-card' style='margin-bottom: 1rem;'>", unsafe_allow_html=True)
+                        col_det, col_ops = st.columns([4, 1.2])
                         
-                        if btn_approve:
-                            update_movie_status(movie['id'], 'Active')
-                            st.toast(f"影片《{movie['title']}》已成功核准發佈！ 🎉")
-                            st.rerun()
+                        with col_det:
+                            st.write(f"### {movie['title']}")
+                            st.markdown(f"**類別:** `{movie['genre']}` | **片長:** `{movie['duration']}` | **上傳者:** `{movie['uploaded_by']}`")
+                            st.write(f"**大綱描述:** {movie['description']}")
+                            if movie.get('video_path'):
+                                st.write(f"*影片檔案已暫存於:* `{movie['video_path']}`")
+                                
+                        with col_ops:
+                            st.write(" ")
+                            st.write(" ")
+                            btn_approve = st.button("核准通過", key=f"appr_{movie['id']}", type="primary")
+                            btn_reject = st.button("予以駁回", key=f"rej_{movie['id']}", type="secondary")
                             
-                        if btn_reject:
-                            update_movie_status(movie['id'], 'Rejected')
-                            st.toast(f"影片《{movie['title']}》已被駁回。")
-                            st.rerun()
+                            if btn_approve:
+                                update_movie_status(movie['id'], 'Active')
+                                st.toast(f"影片 【{movie['title']}】 已審核通過 (空間資料已同步至雲端)")
+                                st.rerun()
+                                
+                            if btn_reject:
+                                update_movie_status(movie['id'], 'Rejected')
+                                st.toast(f"影片 【{movie['title']}】 已被駁回 (空間資料已同步至雲端)")
+                                st.rerun()
+                                
+                        st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.info("💡 目前沒有待審核的影片。")
+                    
+            with tab_all_adm:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM Movie ORDER BY id DESC")
+                all_movies = [dict(row) for row in cursor.fetchall()]
+                conn.close()
+                
+                if all_movies:
+                    for m in all_movies:
+                        st.markdown("<div class='glass-card' style='margin-bottom: 1rem;'>", unsafe_allow_html=True)
+                        col_det, col_ops = st.columns([4, 1.5])
+                        
+                        with col_det:
+                            st.write(f"### {m['title']}")
+                            status_badge = ""
+                            if m['status'] == "Active":
+                                status_badge = "🟢 已發佈 (Active)"
+                            elif m['status'] == "Pending":
+                                status_badge = "🟡 待審核 (Pending)"
+                            elif m['status'] == "Rejected":
+                                status_badge = "🔴 已駁回 (Rejected)"
+                            st.markdown(f"**類別:** `{m['genre']}` | **可見度:** `{m['visibility']}` | **狀態:** {status_badge}")
+                            st.write(f"**上傳者:** `{m['uploaded_by']}` | **片長:** `{m['duration']}`")
+                            st.write(f"**大綱描述:** {m['description']}")
                             
-                    st.markdown("</div>", unsafe_allow_html=True)
-            else:
-                st.info("🎈 目前沒有待審核的影片。")
+                        with col_ops:
+                            st.write(" ")
+                            st.write(" ")
+                            with st.popover("🔥 強制下架並銷毀"):
+                                st.warning("確認要將此影片從整個系統平台中完全銷毀嗎？此操作不可逆！")
+                                if st.button("確認銷毀", key=f"destroy_mv_{m['id']}"):
+                                    delete_movie(m['id'])
+                                    st.toast(f"已從平台強制銷毀影片 【{m['title']}】 (空間資料已同步至雲端)")
+                                    st.rerun()
+                                    
+                        st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.info("💡 系統平台目前沒有任何影片。")

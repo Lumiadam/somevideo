@@ -288,6 +288,7 @@ def add_movie(title, genre, description, release_year, duration, poster_path="sr
         
     conn.commit()
     conn.close()
+    trigger_db_sync()
     return movie_id
 
 # --- Admin audit and group management APIs ---
@@ -307,6 +308,7 @@ def update_movie_status(movie_id, status):
     cursor.execute("UPDATE Movie SET status = ? WHERE id = ?", (status, movie_id))
     conn.commit()
     conn.close()
+    trigger_db_sync()
 
 def create_group(name, created_by):
     conn = get_db_connection()
@@ -317,6 +319,7 @@ def create_group(name, created_by):
         # Creator automatically joins as Owner with status Joined
         cursor.execute("INSERT INTO Group_Members (group_id, username, group_role, status) VALUES (?, ?, 'Owner', 'Joined')", (group_id, created_by))
         conn.commit()
+        trigger_db_sync()
         success = True
         msg = f"群組「{name}」建立成功！您已自動成為群組建立者。"
     except sqlite3.IntegrityError:
@@ -334,6 +337,7 @@ def join_group(group_id, username):
     try:
         cursor.execute("INSERT INTO Group_Members (group_id, username, group_role, status) VALUES (?, ?, 'Member', 'Pending_Approval')", (group_id, username))
         conn.commit()
+        trigger_db_sync()
         success = True
         msg = "已送出加入申請，請等待群組建立者審核。"
     except sqlite3.IntegrityError:
@@ -373,6 +377,7 @@ def update_group_member_status(group_id, member_username, status):
     """, (status, group_id, member_username))
     conn.commit()
     conn.close()
+    trigger_db_sync()
 
 def get_user_groups(username):
     conn = get_db_connection()
@@ -545,6 +550,7 @@ def add_movie_to_group(group_id, movie_id, shared_by, status="Pending"):
     """, (group_id, movie_id, status, shared_by))
     conn.commit()
     conn.close()
+    trigger_db_sync()
 
 def approve_group_movie(group_id, movie_id):
     conn = get_db_connection()
@@ -555,6 +561,7 @@ def approve_group_movie(group_id, movie_id):
     """, (group_id, movie_id))
     conn.commit()
     conn.close()
+    trigger_db_sync()
 
 def reject_group_movie(group_id, movie_id):
     conn = get_db_connection()
@@ -565,6 +572,7 @@ def reject_group_movie(group_id, movie_id):
     """, (group_id, movie_id))
     conn.commit()
     conn.close()
+    trigger_db_sync()
 
 def get_group_pending_movies(group_id):
     conn = get_db_connection()
@@ -587,6 +595,7 @@ def delete_movie(movie_id):
     cursor.execute("DELETE FROM Movie WHERE id = ?", (movie_id,))
     conn.commit()
     conn.close()
+    trigger_db_sync()
 
 def kick_group_member(group_id, username):
     conn = get_db_connection()
@@ -597,6 +606,7 @@ def kick_group_member(group_id, username):
     """, (group_id, username))
     conn.commit()
     conn.close()
+    trigger_db_sync()
 
 def get_group_joined_members(group_id):
     conn = get_db_connection()
@@ -622,3 +632,65 @@ def get_group_active_movies(group_id):
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+def sync_db_to_github():
+    import streamlit as st
+    import requests
+    import base64
+    import os
+    
+    try:
+        if "github" not in st.secrets:
+            return
+        gh_sec = st.secrets["github"]
+        token = gh_sec.get("token")
+        repo = gh_sec.get("repo")
+        path = gh_sec.get("path", "data/recommender.db")
+        branch = gh_sec.get("branch", "main")
+        
+        if not token or not repo:
+            return
+    except Exception:
+        return
+        
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "recommender.db")
+    if not os.path.exists(db_path):
+        return
+        
+    try:
+        with open(db_path, "rb") as f:
+            content = f.read()
+        content_b64 = base64.b64encode(content).decode("utf-8")
+    except Exception:
+        return
+        
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    sha = None
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            sha = res.json().get("sha")
+    except Exception:
+        pass
+        
+    data = {
+        "message": "Auto-sync recommender.db from Streamlit Cloud",
+        "content": content_b64,
+        "branch": branch
+    }
+    if sha:
+        data["sha"] = sha
+        
+    try:
+        requests.put(url, headers=headers, json=data, timeout=15)
+    except Exception:
+        pass
+
+def trigger_db_sync():
+    import threading
+    threading.Thread(target=sync_db_to_github, daemon=True).start()

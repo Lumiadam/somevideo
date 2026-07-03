@@ -91,5 +91,61 @@ class TestDashboardFeatures(unittest.TestCase):
         # Clean up
         reject_group_movie(group_id=2, movie_id=1)
 
+    def test_movie_deletion_and_member_kicking(self):
+        """Test general movie deletion cascading and group member kicking."""
+        from src.data_manager import add_movie, delete_movie, kick_group_member, get_group_joined_members, get_movie
+        
+        # 1. Add a test movie
+        mid = add_movie(
+            title="Temp Test Movie",
+            genre="科幻",
+            description="Testing deletion",
+            release_year=2026,
+            duration="120 mins",
+            uploaded_by="user1",
+            status="Active",
+            group_id=2
+        )
+        
+        # Verify movie exists
+        movie_before = get_movie(mid)
+        self.assertIsNotNone(movie_before)
+        
+        # Verify it has mapping in Group_Movies
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM Group_Movies WHERE movie_id = ?", (mid,))
+        self.assertIsNotNone(cursor.fetchone())
+        
+        # 2. Delete the movie
+        delete_movie(mid)
+        
+        # Verify movie no longer exists
+        movie_after = get_movie(mid)
+        self.assertIsNone(movie_after)
+        
+        # Verify mapping is deleted as well (cascade)
+        cursor.execute("SELECT 1 FROM Group_Movies WHERE movie_id = ?", (mid,))
+        self.assertIsNone(cursor.fetchone())
+        conn.close()
+        
+        # 3. Test group member kicking
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO Group_Members (group_id, username, group_role, status) VALUES (2, 'temp_user', 'Member', 'Joined')")
+        conn.commit()
+        conn.close()
+        
+        members_before = get_group_joined_members(2)
+        member_usernames_before = [m["username"] for m in members_before]
+        self.assertIn("temp_user", member_usernames_before)
+        
+        # Kick the member
+        kick_group_member(group_id=2, username="temp_user")
+        
+        members_after = get_group_joined_members(2)
+        member_usernames_after = [m["username"] for m in members_after]
+        self.assertNotIn("temp_user", member_usernames_after)
+
 if __name__ == "__main__":
     unittest.main()
